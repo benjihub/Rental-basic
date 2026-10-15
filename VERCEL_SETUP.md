@@ -1,23 +1,29 @@
-# Vercel demo deployment
+# Vercel setup — final demo build
 
-Use these Environment Variables in Vercel:
+Use these environment variables for the deployment:
 
-- `DB_PATH=/tmp/rental-manager.sqlite`
-- `SEED_DEMO=true`
-- `ADMIN_EMAIL=admin@rental.local`
-- `ADMIN_PASSWORD=admin123` (change for your deployment)
-- `SESSION_SECRET=<a-long-random-secret>`
+```text
+DB_PATH=/tmp/rental-manager.sqlite
+SEED_DEMO=true
+SESSION_SECRET=choose-any-long-random-string
+```
 
-Then redeploy the project.
+Optional custom administrator credentials:
 
-## Why SESSION_SECRET matters
-The application now uses a signed stateless login cookie instead of an in-memory session. This prevents `Unauthorized` errors when Vercel routes Rentals, Payments, or other API requests to a different serverless function instance.
+```text
+ADMIN_EMAIL=your-email@example.com
+ADMIN_PASSWORD=your-password
+```
 
-## Demo-storage limitation
-`/tmp` SQLite is temporary storage on Vercel. It is fine for a presentation/demo, but data is not guaranteed to persist across serverless instances or restarts. For permanent production data, move the database to PostgreSQL (for example Supabase/Neon).
+The presentation recovery login is always available in this build:
 
+```text
+Email: admin@rental.local
+Password: admin123
+```
 
-## Important: Vercel login behavior
-When both `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set, they are the canonical login credentials for every serverless instance. Do **not** change the password from inside the app on Vercel; update `ADMIN_PASSWORD` in Vercel Environment Variables and redeploy instead.
+The visible currency is **TZ Shs (Tanzanian Shillings)**.
 
-If you see `Invalid email or password`, verify the values in **Project → Settings → Environment Variables** are set for the **Production** environment and redeploy after any change.
+After changing environment variables, redeploy the project.
+
+> `/tmp` SQLite is for a demo deployment only. Vercel may reset or isolate the data between instances. Use PostgreSQL/Supabase for permanent production data.

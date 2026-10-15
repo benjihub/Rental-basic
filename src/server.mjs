@@ -6,24 +6,16 @@ import { db, initDb, seedDemoData, uid, nowIso, today, monthKey, ensureChargesTh
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = resolve('./public');
-const SESSION_SECRET = process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD || 'rental-manager-demo-secret-change-me';
-const ENV_ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || '').trim();
-const ENV_ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '');
-const ENV_MANAGED_AUTH = Boolean(ENV_ADMIN_EMAIL && ENV_ADMIN_PASSWORD);
+// Stateless demo authentication for Vercel. Login must never depend on the
+// instance-local /tmp SQLite database, otherwise different function instances
+// can disagree about the administrator password.
+const SESSION_SECRET = String(process.env.SESSION_SECRET || 'rental-manager-vercel-demo-session-v3');
+const ENV_ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || 'admin@rental.local').trim().toLowerCase();
+const ENV_ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || 'admin123').trim();
+const FALLBACK_ADMIN_EMAIL = 'admin@rental.local';
+const FALLBACK_ADMIN_PASSWORD = 'admin123';
+const ENV_MANAGED_AUTH = true;
 initDb();
-function ensureEnvAdmin(){
-  if(!ENV_MANAGED_AUTH) return;
-  let user=db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(ENV_ADMIN_EMAIL);
-  if(!user){
-    db.prepare('INSERT INTO users(id,name,email,password_hash,created_at) VALUES(?,?,?,?,?)')
-      .run(uid('usr'),'Administrator',ENV_ADMIN_EMAIL,hashPassword(ENV_ADMIN_PASSWORD),nowIso());
-  }else{
-    // Vercel /tmp databases are instance-local. Keep every instance synced to
-    // the deployment credentials so login never depends on an old local hash.
-    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(ENV_ADMIN_PASSWORD),user.id);
-  }
-}
-ensureEnvAdmin();
 if(process.env.SEED_DEMO !== 'false') seedDemoData();
 ensureChargesThroughCurrent();
 
@@ -52,8 +44,7 @@ function verifySession(token){
 const auth=req=>{
   const session=verifySession(cookies(req).sid);
   if(!session)return null;
-  const user=queryOne('SELECT id,name,email FROM users WHERE lower(email)=lower(?)',session.email);
-  return user||null;
+  return {id:'admin',name:'Administrator',email:session.email};
 };
 const requireAuth=(req,res)=>{const u=auth(req);if(!u){bad(res,'Unauthorized',401);return null;}return u;};
 const cookieFlags=req=>{const secure=process.env.VERCEL||process.env.NODE_ENV==='production'||String(req.headers['x-forwarded-proto']||'').includes('https');return `HttpOnly; SameSite=Lax; Path=/; Max-Age=43200${secure?'; Secure':''}`};
@@ -80,20 +71,18 @@ async function api(req,res,url){
       const d=await body(req);
       const email=text(d.email);
       const password=String(d.password||'');
-      let user;
-      if(ENV_MANAGED_AUTH){
-        // On Vercel, the deployment environment is the single source of truth
-        // for demo credentials. This avoids instance-local /tmp password drift.
-        if(email.toLowerCase()!==ENV_ADMIN_EMAIL.toLowerCase() || password!==ENV_ADMIN_PASSWORD)
-          return bad(res,'Invalid email or password',401);
-        ensureEnvAdmin();
-        user=queryOne('SELECT * FROM users WHERE lower(email)=lower(?)',ENV_ADMIN_EMAIL);
-      }else{
-        user=queryOne('SELECT * FROM users WHERE lower(email)=lower(?)',email);
-        if(!user||!verifyPassword(password,user.password_hash))return bad(res,'Invalid email or password',401);
-      }
+      const normalizedEmail=email.toLowerCase();
+      const normalizedPassword=password.trim();
+      const envMatch=normalizedEmail===ENV_ADMIN_EMAIL && normalizedPassword===ENV_ADMIN_PASSWORD;
+      // Keep the built-in demo credential as a guaranteed recovery login on
+      // Vercel. This prevents a stale/mis-scoped environment variable from
+      // locking the presenter out immediately before a demo.
+      const fallbackMatch=normalizedEmail===FALLBACK_ADMIN_EMAIL && normalizedPassword===FALLBACK_ADMIN_PASSWORD;
+      if(!envMatch&&!fallbackMatch)return bad(res,'Invalid email or password',401);
+      const signedEmail=envMatch?ENV_ADMIN_EMAIL:FALLBACK_ADMIN_EMAIL;
+      const user={id:'admin',name:'Administrator',email:signedEmail};
       const sid=signSession(user.email);
-      res.writeHead(200,{'Content-Type':'application/json','Set-Cookie':`sid=${encodeURIComponent(sid)}; ${cookieFlags(req)}`});return res.end(JSON.stringify({user:{id:user.id,name:user.name,email:user.email},authManagedByEnv:ENV_MANAGED_AUTH}));
+      res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store','Set-Cookie':`sid=${encodeURIComponent(sid)}; ${cookieFlags(req)}`});return res.end(JSON.stringify({user,authManagedByEnv:true}));
     }
     if(url.pathname==='/api/logout'&&req.method==='POST'){
       res.writeHead(200,{'Content-Type':'application/json','Set-Cookie':'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'});return res.end('{}');
@@ -187,8 +176,7 @@ async function api(req,res,url){
       const d=await body(req);db.prepare(`UPDATE settings SET business_name=?,phone=?,email=?,address=?,currency=?,default_due_day=?,receipt_prefix=?,logo_url=? WHERE id=1`).run(text(d.business_name)||'Rental Manager',text(d.phone),text(d.email),text(d.address),text(d.currency)||'TZS',Math.min(28,Math.max(1,int(d.default_due_day||5))),text(d.receipt_prefix)||'R',text(d.logo_url));log('update','settings','1','Business settings updated');return json(res,200,setting());
     }
     if(url.pathname==='/api/account/password'&&req.method==='PUT'){
-      if(ENV_MANAGED_AUTH) return bad(res,'Password is managed by ADMIN_PASSWORD in Vercel Environment Variables. Change it there and redeploy.',409);
-      const d=await body(req),u=queryOne('SELECT * FROM users WHERE id=?',user.id);if(!verifyPassword(String(d.current_password||''),u.password_hash))return bad(res,'Current password is incorrect');if(String(d.new_password||'').length<8)return bad(res,'New password must be at least 8 characters');db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(String(d.new_password)),user.id);return json(res,200,{ok:true});
+      return bad(res,'For this Vercel/demo build, login is deployment-managed. Update ADMIN_PASSWORD in Vercel Environment Variables and redeploy.',409);
     }
     return bad(res,'Not found',404);
   }catch(e){console.error(e);return bad(res,e.message?.includes('UNIQUE')?'That record already exists.':(e.message||'Server error'),500);}
