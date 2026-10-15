@@ -6,8 +6,24 @@ import { db, initDb, seedDemoData, uid, nowIso, today, monthKey, ensureChargesTh
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = resolve('./public');
-const sessions = new Map();
+const SESSION_SECRET = process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD || 'rental-manager-demo-secret-change-me';
+const ENV_ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || '').trim();
+const ENV_ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '');
+const ENV_MANAGED_AUTH = Boolean(ENV_ADMIN_EMAIL && ENV_ADMIN_PASSWORD);
 initDb();
+function ensureEnvAdmin(){
+  if(!ENV_MANAGED_AUTH) return;
+  let user=db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(ENV_ADMIN_EMAIL);
+  if(!user){
+    db.prepare('INSERT INTO users(id,name,email,password_hash,created_at) VALUES(?,?,?,?,?)')
+      .run(uid('usr'),'Administrator',ENV_ADMIN_EMAIL,hashPassword(ENV_ADMIN_PASSWORD),nowIso());
+  }else{
+    // Vercel /tmp databases are instance-local. Keep every instance synced to
+    // the deployment credentials so login never depends on an old local hash.
+    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(ENV_ADMIN_PASSWORD),user.id);
+  }
+}
+ensureEnvAdmin();
 if(process.env.SEED_DEMO !== 'false') seedDemoData();
 ensureChargesThroughCurrent();
 
@@ -16,8 +32,31 @@ const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application
 const bad=(res,msg,status=400)=>json(res,status,{error:msg});
 const body=async req=>{let s='';for await(const c of req){s+=c;if(s.length>1e6)throw new Error('Payload too large');}return s?JSON.parse(s):{};};
 const cookies=req=>Object.fromEntries(String(req.headers.cookie||'').split(';').filter(Boolean).map(x=>{const i=x.indexOf('=');return [x.slice(0,i).trim(),decodeURIComponent(x.slice(i+1))]}));
-const auth=req=>{const sid=cookies(req).sid;return sid&&sessions.get(sid);};
+function signSession(email){
+  const payload=Buffer.from(JSON.stringify({email,exp:Date.now()+12*60*60*1000})).toString('base64url');
+  const sig=crypto.createHmac('sha256',SESSION_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+function verifySession(token){
+  try{
+    const [payload,sig]=String(token||'').split('.');
+    if(!payload||!sig)return null;
+    const expected=crypto.createHmac('sha256',SESSION_SECRET).update(payload).digest('base64url');
+    const a=Buffer.from(sig),b=Buffer.from(expected);
+    if(a.length!==b.length||!crypto.timingSafeEqual(a,b))return null;
+    const data=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));
+    if(!data.email||!data.exp||Date.now()>data.exp)return null;
+    return data;
+  }catch{return null;}
+}
+const auth=req=>{
+  const session=verifySession(cookies(req).sid);
+  if(!session)return null;
+  const user=queryOne('SELECT id,name,email FROM users WHERE lower(email)=lower(?)',session.email);
+  return user||null;
+};
 const requireAuth=(req,res)=>{const u=auth(req);if(!u){bad(res,'Unauthorized',401);return null;}return u;};
+const cookieFlags=req=>{const secure=process.env.VERCEL||process.env.NODE_ENV==='production'||String(req.headers['x-forwarded-proto']||'').includes('https');return `HttpOnly; SameSite=Lax; Path=/; Max-Age=43200${secure?'; Secure':''}`};
 const q=(url)=>Object.fromEntries(url.searchParams.entries());
 const int=v=>Math.round(Number(v||0));
 const text=v=>String(v??'').trim();
@@ -38,16 +77,29 @@ function recalcRoom(roomId){const active=activeRentalForRoom(roomId);if(active)d
 async function api(req,res,url){
   try{
     if(url.pathname==='/api/login'&&req.method==='POST'){
-      const d=await body(req);const user=queryOne('SELECT * FROM users WHERE lower(email)=lower(?)',text(d.email));
-      if(!user||!verifyPassword(String(d.password||''),user.password_hash))return bad(res,'Invalid email or password',401);
-      const sid=crypto.randomBytes(32).toString('hex');sessions.set(sid,{id:user.id,name:user.name,email:user.email});
-      res.writeHead(200,{'Content-Type':'application/json','Set-Cookie':`sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`});return res.end(JSON.stringify({user:{id:user.id,name:user.name,email:user.email}}));
+      const d=await body(req);
+      const email=text(d.email);
+      const password=String(d.password||'');
+      let user;
+      if(ENV_MANAGED_AUTH){
+        // On Vercel, the deployment environment is the single source of truth
+        // for demo credentials. This avoids instance-local /tmp password drift.
+        if(email.toLowerCase()!==ENV_ADMIN_EMAIL.toLowerCase() || password!==ENV_ADMIN_PASSWORD)
+          return bad(res,'Invalid email or password',401);
+        ensureEnvAdmin();
+        user=queryOne('SELECT * FROM users WHERE lower(email)=lower(?)',ENV_ADMIN_EMAIL);
+      }else{
+        user=queryOne('SELECT * FROM users WHERE lower(email)=lower(?)',email);
+        if(!user||!verifyPassword(password,user.password_hash))return bad(res,'Invalid email or password',401);
+      }
+      const sid=signSession(user.email);
+      res.writeHead(200,{'Content-Type':'application/json','Set-Cookie':`sid=${encodeURIComponent(sid)}; ${cookieFlags(req)}`});return res.end(JSON.stringify({user:{id:user.id,name:user.name,email:user.email},authManagedByEnv:ENV_MANAGED_AUTH}));
     }
     if(url.pathname==='/api/logout'&&req.method==='POST'){
-      const sid=cookies(req).sid;if(sid)sessions.delete(sid);res.writeHead(200,{'Content-Type':'application/json','Set-Cookie':'sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});return res.end('{}');
+      res.writeHead(200,{'Content-Type':'application/json','Set-Cookie':'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'});return res.end('{}');
     }
     const user=requireAuth(req,res);if(!user)return;
-    if(url.pathname==='/api/me'&&req.method==='GET')return json(res,200,{user,settings:setting()});
+    if(url.pathname==='/api/me'&&req.method==='GET')return json(res,200,{user,settings:setting(),authManagedByEnv:ENV_MANAGED_AUTH});
     ensureChargesThroughCurrent();
 
     if(url.pathname==='/api/dashboard'&&req.method==='GET'){
@@ -135,6 +187,7 @@ async function api(req,res,url){
       const d=await body(req);db.prepare(`UPDATE settings SET business_name=?,phone=?,email=?,address=?,currency=?,default_due_day=?,receipt_prefix=?,logo_url=? WHERE id=1`).run(text(d.business_name)||'Rental Manager',text(d.phone),text(d.email),text(d.address),text(d.currency)||'TZS',Math.min(28,Math.max(1,int(d.default_due_day||5))),text(d.receipt_prefix)||'R',text(d.logo_url));log('update','settings','1','Business settings updated');return json(res,200,setting());
     }
     if(url.pathname==='/api/account/password'&&req.method==='PUT'){
+      if(ENV_MANAGED_AUTH) return bad(res,'Password is managed by ADMIN_PASSWORD in Vercel Environment Variables. Change it there and redeploy.',409);
       const d=await body(req),u=queryOne('SELECT * FROM users WHERE id=?',user.id);if(!verifyPassword(String(d.current_password||''),u.password_hash))return bad(res,'Current password is incorrect');if(String(d.new_password||'').length<8)return bad(res,'New password must be at least 8 characters');db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(String(d.new_password)),user.id);return json(res,200,{ok:true});
     }
     return bad(res,'Not found',404);
