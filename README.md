@@ -17,7 +17,7 @@ A complete single-business rental management system built for room/property oper
 - Outstanding rent reporting
 - Occupancy reporting
 - Expense tracking and net cash summary
-- Business/currency/settings management
+- Business/currency/settings management (defaults to Tanzanian Shillings — TZS, displayed as TSh)
 - Activity log
 - Responsive desktop/mobile UI
 - Persistent SQLite database

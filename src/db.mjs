@@ -52,7 +52,7 @@ export function initDb(){
     );
     CREATE TABLE IF NOT EXISTS settings(
       id INTEGER PRIMARY KEY CHECK(id=1), business_name TEXT NOT NULL DEFAULT 'Rental Manager',
-      phone TEXT DEFAULT '', email TEXT DEFAULT '', address TEXT DEFAULT '', currency TEXT NOT NULL DEFAULT 'UGX',
+      phone TEXT DEFAULT '', email TEXT DEFAULT '', address TEXT DEFAULT '', currency TEXT NOT NULL DEFAULT 'TZS',
       default_due_day INTEGER NOT NULL DEFAULT 5, receipt_prefix TEXT NOT NULL DEFAULT 'R', logo_url TEXT DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS rooms(

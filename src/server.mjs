@@ -4,7 +4,7 @@ import { extname, join, resolve } from 'node:path';
 import crypto from 'node:crypto';
 import { db, initDb, seedDemoData, uid, nowIso, today, monthKey, ensureChargesThroughCurrent, ensureCharge, allocatePayment, refreshChargeStatus, receiptNo, verifyPassword, hashPassword, log } from './db.mjs';
 
-const PORT = Number(process.env.PORT || 3003);
+const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = resolve('./public');
 const sessions = new Map();
 initDb();
@@ -132,7 +132,7 @@ async function api(req,res,url){
     if(url.pathname==='/api/activity'&&req.method==='GET')return json(res,200,queryAll('SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 80'));
 
     if(url.pathname==='/api/settings'&&req.method==='PUT'){
-      const d=await body(req);db.prepare(`UPDATE settings SET business_name=?,phone=?,email=?,address=?,currency=?,default_due_day=?,receipt_prefix=?,logo_url=? WHERE id=1`).run(text(d.business_name)||'Rental Manager',text(d.phone),text(d.email),text(d.address),text(d.currency)||'UGX',Math.min(28,Math.max(1,int(d.default_due_day||5))),text(d.receipt_prefix)||'R',text(d.logo_url));log('update','settings','1','Business settings updated');return json(res,200,setting());
+      const d=await body(req);db.prepare(`UPDATE settings SET business_name=?,phone=?,email=?,address=?,currency=?,default_due_day=?,receipt_prefix=?,logo_url=? WHERE id=1`).run(text(d.business_name)||'Rental Manager',text(d.phone),text(d.email),text(d.address),text(d.currency)||'TZS',Math.min(28,Math.max(1,int(d.default_due_day||5))),text(d.receipt_prefix)||'R',text(d.logo_url));log('update','settings','1','Business settings updated');return json(res,200,setting());
     }
     if(url.pathname==='/api/account/password'&&req.method==='PUT'){
       const d=await body(req),u=queryOne('SELECT * FROM users WHERE id=?',user.id);if(!verifyPassword(String(d.current_password||''),u.password_hash))return bad(res,'Current password is incorrect');if(String(d.new_password||'').length<8)return bad(res,'New password must be at least 8 characters');db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(String(d.new_password)),user.id);return json(res,200,{ok:true});

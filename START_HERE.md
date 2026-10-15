@@ -22,3 +22,5 @@ SEED_DEMO=false npm start
 ```
 
 See `README.md` for deployment, database, backup, payment, and receipt details.
+
+Currency: Tanzanian Shillings (TZS), displayed throughout the interface as TSh.
