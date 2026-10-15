@@ -1,0 +1,15 @@
+{
+  "name": "rental-manager-final",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Single-business room rental management system with SQLite persistence.",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs",
+    "reset-demo": "node src/reset-demo.mjs"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
